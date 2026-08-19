@@ -29,7 +29,6 @@ import {
   ResourceCache,
   ResourceLoaderState,
   RuntimeError,
-  Sampler,
   Texture,
   TextureMagnificationFilter,
   TextureMinificationFilter,
@@ -108,6 +107,8 @@ describe(
       "./Data/Models/glTF-2.0/BoomBox/glTF-pbrSpecularGlossiness/BoomBox.gltf";
     const largeFeatureIdTexture =
       "./Data/Models/glTF-2.0/LargeFeatureIdTexture/glTF/LargeFeatureIdTexture.gltf";
+    const featureIdTextureWithTextureTransform =
+      "./Data/Models/glTF-2.0/FeatureIdTextureWithTextureTransform/glTF/FeatureIdTextureWithTextureTransform.gltf";
     const boxArticulations =
       "./Data/Models/glTF-2.0/BoxArticulations/glTF/BoxArticulations.gltf";
     const boxWithPrimitiveOutline =
@@ -128,6 +129,8 @@ describe(
       "./Data/Models/glTF-2.0/BoxAnisotropy/glTF/BoxAnisotropy.gltf";
     const clearcoatTestData =
       "./Data/Models/glTF-2.0/BoxClearcoat/glTF/BoxClearcoat.gltf";
+    const planarFillTestData =
+      "./Data/Models/glTF-2.0/PlanarFill/glTF/planar-fill-polygons.gltf";
     const pointStyleTestData =
       "./Data/Models/glTF-2.0/StyledPoints/points-r5-g8-b14-y10.gltf";
     const meshPrimitiveRestartTestData =
@@ -382,6 +385,21 @@ describe(
       }
 
       return glbBuffer;
+    }
+
+    // Feature ID textures are always sampled with nearest filtering, but they
+    // keep the wrap modes declared by the glTF. When a glTF omits the sampler,
+    // or omits wrapS/wrapT, the glTF default of REPEAT applies.
+    function expectNearestSamplerWithWrap(texture, wrapS, wrapT) {
+      const sampler = texture.sampler;
+      expect(sampler.wrapS).toBe(wrapS);
+      expect(sampler.wrapT).toBe(wrapT);
+      expect(sampler.minificationFilter).toBe(
+        TextureMinificationFilter.NEAREST,
+      );
+      expect(sampler.magnificationFilter).toBe(
+        TextureMagnificationFilter.NEAREST,
+      );
     }
 
     function getAttribute(attributes, semantic, setIndex) {
@@ -1280,6 +1298,37 @@ describe(
       });
     });
 
+    it("does not override the wrap mode of feature ID textures", function () {
+      return loadGltf(microcosm).then(function (gltfLoader) {
+        const primitive = gltfLoader.components.scene.nodes[0].primitives[0];
+        const { texture } = primitive.featureIds[0].textureReader;
+
+        // microcosm.gltf declares no sampler at all, so the glTF default of
+        // REPEAT applies. Forcing nearest filtering must not clamp the texture.
+        expectNearestSamplerWithWrap(
+          texture,
+          TextureWrap.REPEAT,
+          TextureWrap.REPEAT,
+        );
+      });
+    });
+
+    it("keeps the wrap mode a feature ID texture declares explicitly", function () {
+      return loadGltf(featureIdTextureWithTextureTransform).then(
+        function (gltfLoader) {
+          const primitive = gltfLoader.components.scene.nodes[0].primitives[0];
+          const { texture } = primitive.featureIds[0].textureReader;
+
+          // This glTF asks for CLAMP_TO_EDGE, which must be honored as-is.
+          expectNearestSamplerWithWrap(
+            texture,
+            TextureWrap.CLAMP_TO_EDGE,
+            TextureWrap.CLAMP_TO_EDGE,
+          );
+        },
+      );
+    });
+
     it("loads Microcosm", function () {
       return loadGltf(microcosm).then(function (gltfLoader) {
         const components = gltfLoader.components;
@@ -1307,8 +1356,10 @@ describe(
         expect(featureIdTexture.textureReader.texCoord).toBe(0);
         expect(featureIdTexture.textureReader.texture.width).toBe(256);
         expect(featureIdTexture.textureReader.texture.height).toBe(256);
-        expect(featureIdTexture.textureReader.texture.sampler).toBe(
-          Sampler.NEAREST,
+        expectNearestSamplerWithWrap(
+          featureIdTexture.textureReader.texture,
+          TextureWrap.REPEAT,
+          TextureWrap.REPEAT,
         );
 
         const classDefinition = structuralMetadata.schema.classes.landCover;
@@ -1372,8 +1423,10 @@ describe(
         expect(featureIdTexture.textureReader.texCoord).toBe(0);
         expect(featureIdTexture.textureReader.texture.width).toBe(256);
         expect(featureIdTexture.textureReader.texture.height).toBe(256);
-        expect(featureIdTexture.textureReader.texture.sampler).toBe(
-          Sampler.NEAREST,
+        expectNearestSamplerWithWrap(
+          featureIdTexture.textureReader.texture,
+          TextureWrap.REPEAT,
+          TextureWrap.REPEAT,
         );
 
         const classDefinition = structuralMetadata.schema.classes.landCover;
@@ -1436,7 +1489,11 @@ describe(
         const texture = featureIdTexture.textureReader.texture;
         expect(texture.width).toBe(1024);
         expect(texture.height).toBe(1024);
-        expect(texture.sampler).toBe(Sampler.NEAREST);
+        expectNearestSamplerWithWrap(
+          texture,
+          TextureWrap.REPEAT,
+          TextureWrap.REPEAT,
+        );
 
         featureIdTexture = primitive.featureIds[1];
         expect(featureIdTexture).toBeInstanceOf(
@@ -4312,6 +4369,79 @@ describe(
       expect(clearcoatRoughnessFactor).toBe(0.2);
       expect(clearcoatRoughnessTexture.texture.width).toBe(256);
       expect(clearcoatNormalTexture.texture.width).toBe(256);
+    });
+
+    it("loads model with BENTLEY_materials_planar_fill extension", async function () {
+      const gltfLoader = await loadGltf(planarFillTestData);
+
+      const nodes = gltfLoader.components.nodes;
+      expect(nodes.length).toBe(42);
+
+      // Node 0: Material 0 - wireframeFill: 0, backgroundFill: false, behind: false
+      const material0 = nodes[0].primitives[0].material;
+      expect(material0.planarFill).toBeDefined();
+      expect(material0.planarFill.wireframeFill).toBe(0);
+      expect(material0.planarFill.backgroundFill).toBe(false);
+      expect(material0.planarFill.behind).toBe(false);
+
+      // Node 1: Material 1 - wireframeFill: 0, backgroundFill: false, behind: true
+      const material1 = nodes[1].primitives[0].material;
+      expect(material1.planarFill).toBeDefined();
+      expect(material1.planarFill.wireframeFill).toBe(0);
+      expect(material1.planarFill.backgroundFill).toBe(false);
+      expect(material1.planarFill.behind).toBe(true);
+
+      // Node 2: Material 2 - wireframeFill: 0, backgroundFill: true, behind: false
+      const material2 = nodes[2].primitives[0].material;
+      expect(material2.planarFill).toBeDefined();
+      expect(material2.planarFill.wireframeFill).toBe(0);
+      expect(material2.planarFill.backgroundFill).toBe(true);
+      expect(material2.planarFill.behind).toBe(false);
+
+      // Node 4: Material 4 - wireframeFill: 1, backgroundFill: false, behind: false
+      const material4 = nodes[4].primitives[0].material;
+      expect(material4.planarFill).toBeDefined();
+      expect(material4.planarFill.wireframeFill).toBe(1);
+      expect(material4.planarFill.backgroundFill).toBe(false);
+      expect(material4.planarFill.behind).toBe(false);
+
+      // Node 8: Material 8 - wireframeFill: 2, backgroundFill: false, behind: false
+      const material8 = nodes[8].primitives[0].material;
+      expect(material8.planarFill).toBeDefined();
+      expect(material8.planarFill.wireframeFill).toBe(2);
+      expect(material8.planarFill.backgroundFill).toBe(false);
+      expect(material8.planarFill.behind).toBe(false);
+
+      // Node 12: Material 12 (NoExtension) - no extension
+      const material12 = nodes[12].primitives[0].material;
+      expect(material12.planarFill).toBeUndefined();
+
+      // Node 13: Material 13 (Backdrop) - only behind: false specified, defaults for rest
+      const material13 = nodes[13].primitives[0].material;
+      expect(material13.planarFill).toBeDefined();
+      expect(material13.planarFill.wireframeFill).toBe(0);
+      expect(material13.planarFill.backgroundFill).toBe(false);
+      expect(material13.planarFill.behind).toBe(false);
+    });
+
+    it("loads model with BENTLEY_materials_planar_fill extension with defaults", async function () {
+      function modifyGltf(gltf) {
+        // Set extension with empty object to test defaults
+        gltf.materials[0].extensions.BENTLEY_materials_planar_fill = {};
+        return gltf;
+      }
+
+      const gltfLoader = await loadModifiedGltfAndTest(
+        planarFillTestData,
+        undefined,
+        modifyGltf,
+      );
+
+      const material = gltfLoader.components.nodes[0].primitives[0].material;
+      expect(material.planarFill).toBeDefined();
+      expect(material.planarFill.wireframeFill).toBe(0);
+      expect(material.planarFill.backgroundFill).toBe(false);
+      expect(material.planarFill.behind).toBe(false);
     });
 
     it("loads model with EXT_textureInfo_constant_lod extension on base color texture", async function () {
